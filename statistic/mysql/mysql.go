@@ -27,24 +27,29 @@ type Authenticator struct {
 }
 
 func (a *Authenticator) updater() {
+	tk := time.NewTicker(a.updateDuration)
+	defer tk.Stop()
 	for {
+		var affected int64
 		for _, user := range a.ListUsers() {
 			// swap upload and download for users
 			hash := user.Hash()
 			sent, recv := user.ResetTraffic()
-
+			if sent == 0 && recv == 0 {
+				continue
+			}
 			s, err := a.db.Exec("UPDATE `users` SET `upload`=`upload`+?, `download`=`download`+? WHERE `password`=?;", recv, sent, hash)
 			if err != nil {
 				log.Error(common.NewError("failed to update data to user table").Base(err))
 				continue
 			}
-			if r, err := s.RowsAffected(); err != nil {
-				if r == 0 {
-					a.DelUser(hash)
-				}
+			r, _ := s.RowsAffected()
+			if r == 0 {
+				a.DelUser(hash)
 			}
+			affected += r
 		}
-		log.Info("buffered data has been written into the database")
+		log.Info("buffered data has been written into the database", "affected", affected)
 
 		// update memory
 		rows, err := a.db.Query("SELECT password,quota,download,upload FROM users")
@@ -67,9 +72,11 @@ func (a *Authenticator) updater() {
 				a.DelUser(hash)
 			}
 		}
+		rows.Close()
+		log.Info("load data from database")
 
 		select {
-		case <-time.After(a.updateDuration):
+		case <-tk.C:
 		case <-a.ctx.Done():
 			log.Debug("MySQL daemon exiting...")
 			return
