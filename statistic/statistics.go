@@ -48,7 +48,7 @@ type Creator func(ctx context.Context) (Authenticator, error)
 var (
 	createdAuthLock sync.Mutex
 	authCreators    = make(map[string]Creator)
-	createdAuth     = make(map[context.Context]Authenticator)
+	createdAuth     = make(map[string]Authenticator)
 )
 
 func RegisterAuthenticatorCreator(name string, creator Creator) {
@@ -59,7 +59,7 @@ func NewAuthenticator(ctx context.Context, name string) (Authenticator, error) {
 	// allocate a unique authenticator for each context
 	createdAuthLock.Lock() // avoid concurrent map read/write
 	defer createdAuthLock.Unlock()
-	if auth, found := createdAuth[ctx]; found {
+	if auth, found := createdAuth[name]; found {
 		log.Debug("authenticator has been created:", name)
 		return auth, nil
 	}
@@ -71,6 +71,6 @@ func NewAuthenticator(ctx context.Context, name string) (Authenticator, error) {
 	if err != nil {
 		return nil, err
 	}
-	createdAuth[ctx] = auth
+	createdAuth[name] = auth
 	return auth, err
 }
