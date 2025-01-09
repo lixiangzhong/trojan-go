@@ -52,7 +52,7 @@ func (a *Authenticator) updater() {
 		log.Info("buffered data has been written into the database", "affected", affected)
 
 		// update memory
-		rows, err := a.db.Query("SELECT password,quota,download,upload FROM users")
+		rows, err := a.db.Query("SELECT password,quota,download,upload,speed_sent,speed_recv FROM users")
 		if err != nil || rows.Err() != nil {
 			log.Error(common.NewError("failed to pull data from the database").Base(err))
 			time.Sleep(a.updateDuration)
@@ -61,13 +61,17 @@ func (a *Authenticator) updater() {
 		for rows.Next() {
 			var hash string
 			var quota, download, upload int64
-			err := rows.Scan(&hash, &quota, &download, &upload)
+			var speedSent, speedRecv int
+			err := rows.Scan(&hash, &quota, &download, &upload, &speedSent, &speedRecv)
 			if err != nil {
 				log.Error(common.NewError("failed to obtain data from the query result").Base(err))
 				break
 			}
-			if download+upload < quota || quota < 0 {
+			if download+upload < quota || quota <= 0 {
 				a.AddUser(hash)
+				if exist, u := a.Authenticator.AuthUser(hash); exist {
+					u.SetSpeedLimit(speedSent, speedRecv)
+				}
 			} else {
 				a.DelUser(hash)
 			}
@@ -82,6 +86,28 @@ func (a *Authenticator) updater() {
 			return
 		}
 	}
+}
+
+func (a *Authenticator) AuthUser(hash string) (bool, statistic.User) {
+	exist, u := a.Authenticator.AuthUser(hash)
+	if exist {
+		return exist, u
+	}
+	var quota, download, upload int64
+	var speedSent, speedRecv int
+	err := a.db.QueryRow("SELECT quota,download,upload,speed_sent,speed_recv FROM users WHERE password=?", hash).
+		Scan(&quota, &download, &upload, &speedSent, &speedRecv)
+	if err != nil {
+		return false, nil
+	}
+	if download+upload < quota || quota <= 0 {
+		a.AddUser(hash)
+		if exist, u := a.Authenticator.AuthUser(hash); exist {
+			u.SetSpeedLimit(speedSent, speedRecv)
+		}
+		return true, u
+	}
+	return false, nil
 }
 
 func connectDatabase(driverName, username, password, ip string, port int, dbName string) (*sql.DB, error) {
@@ -102,15 +128,12 @@ func NewAuthenticator(ctx context.Context) (statistic.Authenticator, error) {
 	if err != nil {
 		return nil, common.NewError("Failed to connect to database server").Base(err)
 	}
-	memoryAuth, err := memory.NewAuthenticator(ctx)
-	if err != nil {
-		return nil, err
-	}
+	db.SetMaxOpenConns(10)
 	a := &Authenticator{
 		db:             db,
 		ctx:            ctx,
 		updateDuration: time.Duration(cfg.MySQL.CheckRate) * time.Second,
-		Authenticator:  memoryAuth.(*memory.Authenticator),
+		Authenticator:  memory.NewAuthenticatorPlain(ctx),
 	}
 	go a.updater()
 	log.Debug("mysql authenticator created")

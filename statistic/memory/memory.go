@@ -233,6 +233,13 @@ func NewAuthenticator(ctx context.Context) (statistic.Authenticator, error) {
 	return u, nil
 }
 
+func NewAuthenticatorPlain(ctx context.Context) *Authenticator {
+	u := &Authenticator{
+		ctx: ctx,
+	}
+	return u
+}
+
 func init() {
 	statistic.RegisterAuthenticatorCreator(Name, NewAuthenticator)
 }
